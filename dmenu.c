@@ -155,19 +155,17 @@ drawhighlights(struct item *item, int x, int y, int maxw)
 	                   ? SchemeSelHighlight
 	                   : SchemeNormHighlight]);
 	for (i = 0, highlight = item->text; *highlight && text[i];) {
-		if (*highlight == text[i]) {
-			/* get indentation */
-			c = *highlight;
-			*highlight = '\0';
-			indent = TEXTW(item->text);
-			*highlight = c;
-
-			/* highlight character */
+		if (!fstrncmp(&text[i], highlight, 1)) {
 			c = highlight[1];
 			highlight[1] = '\0';
+
+			/* get indentation */
+			indent = TEXTW(item->text);
+
+			/* highlight character */
 			drw_text(
 				drw,
-				x + indent - (lrpad / 2),
+				x + indent - lrpad,
 				y,
 				MIN(maxw - indent, TEXTW(highlight) - lrpad),
 				bh, 0, highlight, 0
@@ -178,7 +176,6 @@ drawhighlights(struct item *item, int x, int y, int maxw)
 		highlight++;
 	}
 }
-
 
 static int
 drawitem(struct item *item, int x, int y, int w)

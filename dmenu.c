@@ -912,6 +912,7 @@ setup(void)
 	int a, di, n, area = 0;
 #endif
 	/* init appearance */
+    i = 0;
 	for (j = 0; j < SchemeLast; j++)
 		scheme[j] = drw_scm_create(drw, colors[j], alphas[i], 2);
 

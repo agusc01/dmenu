@@ -1033,8 +1033,37 @@ static void
 run(void)
 {
 	XEvent ev;
+	struct pollfd fds[2];
+	int ready;
 
-	while (!XNextEvent(dpy, &ev)) {
+	for (;;) {
+		/*
+		 * Only poll while a preview command is running. Without previews
+		 * retain dmenu's ordinary blocking X event loop.
+		 */
+		if (preview_fd >= 0 && !XPending(dpy)) {
+			fds[0].fd = ConnectionNumber(dpy);
+			fds[0].events = POLLIN;
+			fds[1].fd = preview_fd;
+			fds[1].events = POLLIN | POLLHUP;
+			ready = poll(fds, 2, 100);
+			if (ready < 0 && errno != EINTR)
+				die("preview poll:");
+			if (ready > 0 && (fds[1].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)))
+				preview_read();
+			/* Time limit prevents a broken backend from lingering. */
+			if (preview_fd >= 0 && time(NULL) - preview_start >= 3) {
+				preview_stop();
+				if (preview_length == 0) {
+					strcpy(preview_output, "Preview timed out.");
+					preview_length = strlen(preview_output);
+				}
+				drawmenu();
+			}
+			if (!XPending(dpy))
+				continue;
+		}
+		XNextEvent(dpy, &ev);
 		if (XFilterEvent(&ev, win))
 			continue;
 		switch(ev.type) {
@@ -1094,7 +1123,7 @@ setup(void)
 	bh = drw->fonts->h + 2;
 	bh = MAX(bh,lineheight);	/* make a menu line AT LEAST 'lineheight' tall */
 	lines = MAX(lines, 0);
-	mh = (lines + 1) * bh;
+	mh = (lines + 1 + (title && *title ? 1 : 0)) * bh;
 	promptw = (prompt && *prompt) ? TEXTW(prompt) - lrpad / 4 : 0;
 #ifdef XINERAMA
 	i = 0;
@@ -1123,7 +1152,8 @@ setup(void)
 					break;
 
 		if (centered) {
-			mw = MIN(MAX(max_textw() + promptw, min_width), info[i].width);
+			mw = MIN(MAX(max_textw() + promptw,
+			            preview_command ? MAX(min_width, 900) : min_width), info[i].width);
 			x = info[i].x_org + ((info[i].width  - mw) / 2);
 			y = info[i].y_org + ((info[i].height - mh) / menu_height_ratio);
 		} else {
@@ -1141,7 +1171,8 @@ setup(void)
 			    parentwin);
 
 		if (centered) {
-			mw = MIN(MAX(max_textw() + promptw, min_width), wa.width);
+			mw = MIN(MAX(max_textw() + promptw,
+			            preview_command ? MAX(min_width, 900) : min_width), wa.width);
 			x = (wa.width  - mw) / 2;
 			y = (wa.height - mh) / 2;
 		} else {
@@ -1195,7 +1226,9 @@ usage(void)
 {
 	die("usage: dmenu [-bcfivs] [-vi] [-l lines] [-h height] [-p prompt] [-fn font] [-m monitor]\n"
 	    "             [-nb color] [-nf color] [-sb color] [-sf color] [-bw width]\n"
-	    "             [-nhb color] [-nhf color] [-shb color] [-shf color] [-w windowid]");
+	    "             [-nhb color] [-nhf color] [-shb color] [-shf color] [-w windowid]\n"
+	    "             [-title text] [-preview executable] [-preview-title text]\n"
+	    "             [-preview-pos right] [-preview-size percent]");
 }
 
 int
@@ -1261,6 +1294,21 @@ main(int argc, char *argv[])
 			embed = argv[++i];
 		else if (!strcmp(argv[i], "-bw"))
 			border_width = atoi(argv[++i]); /* border width */
+		else if (!strcmp(argv[i], "-title"))
+			title = argv[++i];
+		else if (!strcmp(argv[i], "-preview"))
+			preview_command = argv[++i];
+		else if (!strcmp(argv[i], "-preview-title"))
+			preview_title = argv[++i];
+		else if (!strcmp(argv[i], "-preview-size")) {
+			int parsed = atoi(argv[++i]);
+			if (parsed < 20 || parsed > 70)
+				usage();
+			preview_size = parsed;
+		} else if (!strcmp(argv[i], "-preview-pos")) {
+			if (strcmp(argv[++i], "right"))
+				usage();
+		}
 		else
 			usage();
 

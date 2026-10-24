@@ -96,6 +96,18 @@ static void xinitvisual();
 
 static void drawmenu(void);
 
+/* Reap cancelled preview commands without ever blocking keyboard input. */
+static void
+preview_reap(int signal_number)
+{
+	int saved_errno = errno;
+
+	(void)signal_number;
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
+	errno = saved_errno;
+}
+
 static void
 preview_stop(void)
 {
@@ -104,10 +116,8 @@ preview_stop(void)
 		preview_fd = -1;
 	}
 	if (preview_pid > 0) {
-		/* The preview is optional: never wait for a hung child. */
-		kill(preview_pid, SIGKILL);
-		while (waitpid(preview_pid, NULL, 0) == -1 && errno == EINTR)
-			;
+		if (waitpid(preview_pid, NULL, WNOHANG) == 0)
+			kill(preview_pid, SIGKILL);
 		preview_pid = -1;
 	}
 }
@@ -155,9 +165,8 @@ preview_select(void)
 	flags = fcntl(fds[0], F_GETFL, 0);
 	if (flags == -1 || fcntl(fds[0], F_SETFL, flags | O_NONBLOCK) == -1) {
 		close(fds[0]);
-		kill(pid, SIGKILL);
-		while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
-			;
+		if (waitpid(pid, NULL, WNOHANG) == 0)
+			kill(pid, SIGKILL);
 		return;
 	}
 	preview_fd = fds[0];
@@ -1235,7 +1244,15 @@ int
 main(int argc, char *argv[])
 {
 	XWindowAttributes wa;
+	struct sigaction child_action;
 	int i, fast = 0;
+
+	memset(&child_action, 0, sizeof child_action);
+	child_action.sa_handler = preview_reap;
+	child_action.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+	sigemptyset(&child_action.sa_mask);
+	if (sigaction(SIGCHLD, &child_action, NULL) == -1)
+		die("sigaction:");
 
 	for (i = 1; i < argc; i++)
 		/* these options take no arguments */

@@ -67,7 +67,7 @@ static unsigned int using_vi_mode = 0;
 /* Optional title and asynchronous, text-only preview. */
 static const char *title = NULL, *preview_command = NULL, *preview_title = NULL;
 static unsigned int preview_size = 45;
-static int password_mode = 0;
+static int password_mode = 0; /* upstream password patch (-P), adapted for this fork */
 static struct item *preview_item = NULL;
 static int preview_fd = -1;
 static pid_t preview_pid = -1;
@@ -412,7 +412,7 @@ drawmenu(void)
 	/* Mask the input without altering the actual text or selection output. */
 	if (password_mode) {
 		for (k = 0; k < strlen(text); k++)
-			masked[k] = '*';
+			masked[k] = '.';
 		masked[k] = '\0';
 		shown = masked;
 	}
@@ -438,7 +438,7 @@ drawmenu(void)
 	curpos += lrpad / 2 - 1;
 	if (using_vi_mode && text[0] != '\0') {
 		drw_setscheme(drw, scheme[SchemeCursor]);
-		char vi_char[] = {password_mode ? '*' : text[cursor], '\0'};
+		char vi_char[] = {password_mode ? '.' : text[cursor], '\0'};
 		drw_text(drw, x + curpos, y, TEXTW(vi_char) - lrpad, bh, 0, vi_char, 0);
 	} else if (using_vi_mode) {
 		drw_setscheme(drw, scheme[SchemeNorm]);
@@ -1030,6 +1030,12 @@ readstdin(void)
 	size_t i, itemsiz = 0, linesiz = 0;
 	ssize_t len;
 
+	/* Upstream password patch: discard all menu items from standard input. */
+	if (password_mode) {
+		lines = 0;
+		return;
+	}
+
 	/* read each line from stdin and add it to the item list */
 	for (i = 0; (len = getline(&line, &linesiz, stdin)) != -1; i++) {
 		if (i + 1 >= itemsiz) {
@@ -1245,7 +1251,7 @@ setup(void)
 static void
 usage(void)
 {
-	die("usage: dmenu [-bcfivs] [-vi] [-password] [-l lines] [-h height] [-p prompt] [-fn font] [-m monitor]\n"
+	die("usage: dmenu [-bcfivsP] [-vi] [-l lines] [-h height] [-p prompt] [-fn font] [-m monitor]\n"
 	    "             [-nb color] [-nf color] [-sb color] [-sf color] [-bw width]\n"
 	    "             [-nhb color] [-nhf color] [-shb color] [-shf color] [-w windowid]\n"
 	    "             [-title text] [-preview executable] [-preview-title text]\n"
@@ -1277,7 +1283,7 @@ main(int argc, char *argv[])
 			fast = 1;
 		else if (!strcmp(argv[i], "-c"))   /* centers dmenu on screen */
 			centered = 1;
-		else if (!strcmp(argv[i], "-password"))
+		else if (!strcmp(argv[i], "-P"))
 			password_mode = 1;
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;

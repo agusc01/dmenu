@@ -54,8 +54,8 @@ check_invalid -preview-pos bottom
 
 
 # Masked text input must parse without requiring any graphical backend.
-check_option -password -title 'Wi-Fi password' -p Password
-check_invalid -password -preview printf
+check_option -P -title 'Wi-Fi password' -p Password
+check_invalid -P -preview printf
 if output=$(printf 'Home Wi-Fi\n' | DISPLAY= ./dmenu --not-an-option 2>&1); then
     echo 'Error: dmenu accepted an unknown option.' >&2
     exit 1

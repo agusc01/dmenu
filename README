@@ -81,7 +81,8 @@ Never use the unmasked default dmenu input for secrets, and keep the resulting
 variable in memory only as briefly as possible.
 
 Patch provenance: the original suckless dmenu 5.0 password patch is
-vendored unchanged as `patches/dmenu-password-5.0.diff` from
-https://tools.suckless.org/dmenu/patches/password/ . Its behavior is
-adapted directly in dmenu.c for this fork (5.3, title/preview, vi mode).
-Do not apply the historical upstream .diff over the integrated implementation.
+stored as `patches/dmenu-password-5.0.diff` from
+https://tools.suckless.org/dmenu/patches/password/ . The adapted patch
+for our dmenu 5.3 tree is stored in `patches/dmenu-password-agusc01-5.3.diff`.
+Its changes are ALREADY integrated in this branch's dmenu.c/dmenu.1.
+Both patch files are kept for reference; do not apply either a second time.

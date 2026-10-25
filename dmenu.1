@@ -4,7 +4,7 @@ dmenu \- dynamic menu
 .SH SYNOPSIS
 .B dmenu
 .RB [ \-bfiv ]
-.RB [ \-password ]
+.RB [ \-P ]
 .RB [ \-l
 .IR lines ]
 .RB [ \-title
@@ -92,8 +92,8 @@ yet supported.
 dmenu grabs the keyboard before reading stdin if not reading from a tty. This
 is faster, but will lock up X until stdin reaches end\-of\-file.
 .TP
-.B \-password
-masks text entered into the input field with asterisks; Return prints
+.B \-P
+replaces characters entered into the input field with dots, ignoring stdin menu entries; Return prints
 the actual value to standard output. This is for callers that consume it
 through a pipe, not on a command line. The flag cannot be combined with
 .BR \-preview .

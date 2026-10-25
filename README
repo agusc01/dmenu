@@ -66,15 +66,22 @@ No existing configuration or menu needs to use these options.
 
 Masked password prompts
 -----------------------
-The optional -password flag renders '*' instead of the characters in the
+The optional -P flag renders dots instead of the characters in the
 input field, while Return writes the actual input to standard output for
 piping to a secure consumer. The password is never passed in argv by dmenu.
 The caller must not log, echo or put it in shell command-line arguments.
-Preview and password mode cannot be used at the same time.
+As in the upstream suckless patch, stdin menu items are ignored. Preview
+and password mode cannot be used at the same time.
 
 Example (requires an X11 session):
 
-    password=$(printf '' | dmenu -password -title 'Wi-Fi password' -p Password)
+    password=$(printf '' | dmenu -P -title 'Wi-Fi password' -p Password)
 
 Never use the unmasked default dmenu input for secrets, and keep the resulting
 variable in memory only as briefly as possible.
+
+Patch provenance: the original suckless dmenu 5.0 password patch is
+vendored unchanged as `patches/dmenu-password-5.0.diff` from
+https://tools.suckless.org/dmenu/patches/password/ . Its behavior is
+adapted directly in dmenu.c for this fork (5.3, title/preview, vi mode).
+Do not apply the historical upstream .diff over the integrated implementation.

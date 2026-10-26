@@ -6,6 +6,16 @@ dmenu \- dynamic menu
 .RB [ \-bfiv ]
 .RB [ \-l
 .IR lines ]
+.RB [ \-title
+.IR text ]
+.RB [ \-preview
+.IR executable ]
+.RB [ \-preview\-title
+.IR text ]
+.RB [ \-preview\-size
+.IR percent ]
+.RB [ \-preview\-pos
+.IR right ]
 .RB [ \-h
 .IR height ]
 .RB [ \-m
@@ -52,6 +62,30 @@ dmenu appears at the bottom of the screen.
 .TP
 .B \-c
 dmenu appears centered on the screen.
+.TP
+.BI \-title " text"
+draws an optional full-width title above the search field.
+.TP
+.BI \-preview " executable"
+shows a text preview pane alongside a vertical list. dmenu directly invokes
+.IR executable
+with the highlighted item as one argument and also sets
+.B DMENU_ITEM
+to its value. No shell is invoked and user input is never interpolated into
+a command string. A running preview is cancelled when the selection changes.
+The output is capped at 8 KiB and the command times out after about 3 seconds.
+.TP
+.BI \-preview\-title " text"
+shows a heading above the contents of the preview panel.
+.TP
+.BI \-preview\-size " percent"
+sets the preview panel width to 20 through 70 percent of the menu.
+The default is 45 percent.
+.TP
+.BI \-preview\-pos " right"
+places the preview to the right of the list. Other positions are not
+yet supported.
+.TP
 .TP
 .B \-f
 dmenu grabs the keyboard before reading stdin if not reading from a tty. This

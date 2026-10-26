@@ -22,3 +22,43 @@ Afterwards enter the following command to build and install dmenu
 Running dmenu
 -------------
 See the man page for details.
+
+
+Optional title and preview
+--------------------------
+A title appears above the search field when -title is specified. The existing
+compact menu layout remains unchanged without a title or preview.
+
+Example with a live Wi-Fi information provider:
+
+    wifi_list | dmenu -i -c -l 10 -p Search \
+        -title 'Wi-Fi Networks' \
+        -preview wifi_info -preview-title 'Network details' \
+        -preview-pos right -preview-size 45
+
+The optional preview adds a right-hand text panel on vertical menus. Each time
+the highlighted row changes, dmenu executes the named executable directly
+with the selected item as its sole argument and in DMENU_ITEM. It does not
+invoke a shell or substitute user-controlled text into a command string.
+The executable must be discoverable in PATH (or be an absolute pathname).
+To pass custom arguments, create a wrapper script with a fixed interface.
+
+Preview commands run asynchronously, with a 3-second time limit and an 8 KiB
+output limit. A superseded preview is cancelled; the menu remains responsive.
+The preview is text-only, with no image or external GUI toolkit dependency.
+The preview-size setting is the percentage of menu width, from 20 to 70.
+Only -preview-pos right is currently supported. Preview content is ignored
+on horizontal menus; use -l for vertical menus.
+
+Test supported flags before launching X11:
+
+    sh tests/cli-options.sh
+
+After rebuilding, test interactively under X11:
+
+    make clean && make
+    printf 'One\nTwo\n' | ./dmenu -c -l 2 -title 'Test' -p 'Search'
+    printf 'One\nTwo\n' | ./dmenu -c -l 2 -title 'Test' \
+        -preview /usr/bin/printf -preview-title 'Details'
+
+No existing configuration or menu needs to use these options.

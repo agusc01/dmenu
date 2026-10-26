@@ -1,5 +1,11 @@
 /* See LICENSE file for copyright and license details. */
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +64,16 @@ static struct item *prev, *curr, *next, *sel;
 static int mon = -1, screen;
 static unsigned int using_vi_mode = 0;
 
+/* Optional title and asynchronous, text-only preview. */
+static const char *title = NULL, *preview_command = NULL, *preview_title = NULL;
+static unsigned int preview_size = 45;
+static struct item *preview_item = NULL;
+static int preview_fd = -1;
+static pid_t preview_pid = -1;
+static time_t preview_start;
+static char preview_output[8193];
+static size_t preview_length;
+
 static Atom clip, utf8;
 static Display *dpy;
 static Window root, parentwin, win;
@@ -77,6 +93,153 @@ static char * cistrstr(const char *s, const char *sub);
 static int (*fstrncmp)(const char *, const char *, size_t) = strncasecmp;
 static char *(*fstrstr)(const char *, const char *) = cistrstr;
 static void xinitvisual();
+
+static void drawmenu(void);
+
+/* Reap cancelled preview commands without ever blocking keyboard input. */
+static void
+preview_reap(int signal_number)
+{
+	int saved_errno = errno;
+
+	(void)signal_number;
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
+	errno = saved_errno;
+}
+
+static void
+preview_stop(void)
+{
+	if (preview_fd >= 0) {
+		close(preview_fd);
+		preview_fd = -1;
+	}
+	if (preview_pid > 0) {
+		if (waitpid(preview_pid, NULL, WNOHANG) == 0)
+			kill(preview_pid, SIGKILL);
+		preview_pid = -1;
+	}
+}
+
+static void
+preview_select(void)
+{
+	int fds[2], flags;
+	pid_t pid;
+
+	if (!preview_command || preview_item == sel)
+		return;
+	preview_stop();
+	preview_item = sel;
+	preview_length = 0;
+	preview_output[0] = '\0';
+	if (!sel || lines == 0)
+		return;
+	if (pipe(fds) == -1)
+		return;
+	pid = fork();
+	if (pid == -1) {
+		close(fds[0]);
+		close(fds[1]);
+		return;
+	}
+	if (pid == 0) {
+		int nullfd;
+		close(fds[0]);
+		if (dup2(fds[1], STDOUT_FILENO) == -1)
+			_exit(127);
+		close(fds[1]);
+		nullfd = open("/dev/null", O_WRONLY);
+		if (nullfd >= 0) {
+			dup2(nullfd, STDERR_FILENO);
+			close(nullfd);
+		}
+		/* Pass the item as data, never through shell interpolation. */
+		if (setenv("DMENU_ITEM", sel->text, 1) == -1)
+			_exit(127);
+		execlp(preview_command, preview_command, sel->text, (char *)NULL);
+		_exit(127);
+	}
+	close(fds[1]);
+	flags = fcntl(fds[0], F_GETFL, 0);
+	if (flags == -1 || fcntl(fds[0], F_SETFL, flags | O_NONBLOCK) == -1) {
+		close(fds[0]);
+		if (waitpid(pid, NULL, WNOHANG) == 0)
+			kill(pid, SIGKILL);
+		return;
+	}
+	preview_fd = fds[0];
+	preview_pid = pid;
+	preview_start = time(NULL);
+}
+
+static void
+preview_read(void)
+{
+	char buf[1024];
+	ssize_t n;
+	size_t count;
+	int changed = 0;
+
+	if (preview_fd < 0)
+		return;
+	for (;;) {
+		n = read(preview_fd, buf, sizeof buf);
+		if (n > 0) {
+			count = MIN((size_t)n, sizeof preview_output - 1 - preview_length);
+			memcpy(preview_output + preview_length, buf, count);
+			preview_length += count;
+			preview_output[preview_length] = '\0';
+			changed = 1;
+			if (preview_length == sizeof preview_output - 1) {
+				preview_stop();
+				break;
+			}
+		} else if (n == 0) {
+			preview_stop();
+			break;
+		} else if (errno == EINTR) {
+			continue;
+		} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			break;
+		} else {
+			preview_stop();
+			break;
+		}
+	}
+	if (changed)
+		drawmenu();
+}
+
+static void
+drawpreview(int x, int y, int w, int h)
+{
+	const char *p, *end;
+	char line[1024];
+	size_t n;
+	int row = y, pad = lrpad / 2;
+
+	if (w <= 2 * pad || h <= 0)
+		return;
+	drw_setscheme(drw, scheme[SchemeSel]);
+	drw_rect(drw, x, y, 1, h, 1, 0);
+	if (preview_title && *preview_title) {
+		drw_text(drw, x + 1, row, w - 1, bh, pad, preview_title, 0);
+		row += bh;
+	}
+	drw_setscheme(drw, scheme[SchemeNorm]);
+	for (p = preview_output; *p && row + bh <= y + h; p = (*end == '\n' ? end + 1 : end)) {
+		end = strchr(p, '\n');
+		if (!end)
+			end = p + strlen(p);
+		n = MIN((size_t)(end - p), sizeof line - 1);
+		memcpy(line, p, n);
+		line[n] = '\0';
+		drw_text(drw, x + pad + 1, row, w - pad - 1, bh, pad, line, 0);
+		row += bh;
+	}
+}
 
 static unsigned int
 textw_clamp(const char *str, unsigned int n)
@@ -129,6 +292,8 @@ static void
 cleanup(void)
 {
 	size_t i;
+
+	preview_stop();
 
 	XUngrabKeyboard(dpy, CurrentTime);
 	for (i = 0; i < SchemeLast; i++)
@@ -234,59 +399,74 @@ drawmenu(void)
 	unsigned int curpos;
 	struct item *item;
 	int x = 0, y = 0, fh = drw->fonts->h, w;
+	int titleh = title && *title ? bh : 0;
+	int listwidth = (preview_command && lines > 0)
+	              ? mw * (100 - preview_size) / 100 : mw;
+
+	preview_select();
 
 	drw_setscheme(drw, scheme[SchemeNorm]);
 	drw_rect(drw, 0, 0, mw, mh, 1, 1);
 
+	if (titleh) {
+		drw_setscheme(drw, scheme[SchemeSel]);
+		drw_text(drw, 0, 0, mw, bh, lrpad / 2, title, 0);
+	}
+	y = titleh;
 	if (prompt && *prompt) {
 		drw_setscheme(drw, scheme[SchemeSel]);
-		x = drw_text(drw, x, 0, promptw, bh, lrpad / 2, prompt, 0);
+		x = drw_text(drw, x, y, promptw, bh, lrpad / 2, prompt, 0);
 	}
-	/* draw input field */
+	/* Draw input field, spanning the full width. */
 	w = (lines > 0 || !matches) ? mw - x : inputw;
 	drw_setscheme(drw, scheme[SchemeNorm]);
-	drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
+	drw_text(drw, x, y, w, bh, lrpad / 2, text, 0);
 
 	curpos = TEXTW(text) - TEXTW(&text[cursor]);
 	curpos += lrpad / 2 - 1;
 	if (using_vi_mode && text[0] != '\0') {
 		drw_setscheme(drw, scheme[SchemeCursor]);
 		char vi_char[] = {text[cursor], '\0'};
-		drw_text(drw, x + curpos, 0, TEXTW(vi_char) - lrpad, bh, 0, vi_char, 0);
+		drw_text(drw, x + curpos, y, TEXTW(vi_char) - lrpad, bh, 0, vi_char, 0);
 	} else if (using_vi_mode) {
 		drw_setscheme(drw, scheme[SchemeNorm]);
-		drw_rect(drw, x + curpos, 2, lrpad / 2, bh - 4, 1, 0);
+		drw_rect(drw, x + curpos, y + 2, lrpad / 2, bh - 4, 1, 0);
 	} else if (curpos < w) {
 		drw_setscheme(drw, scheme[SchemeNorm]);
-		drw_rect(drw, x + curpos, 2 + (bh - fh) / 2, 2, fh - 4, 1, 0);
+		drw_rect(drw, x + curpos, y + 2 + (bh - fh) / 2, 2, fh - 4, 1, 0);
 	}
 
 	recalculatenumbers();
 
 	if (lines > 0) {
-		/* draw vertical list */
-		for (item = curr; item != next; item = item->right)
-			drawitem(item, x, y += bh, mw - x);
+		/* The preview gets its own columns alongside the vertical list. */
+		for (item = curr; item != next; item = item->right) {
+			y += bh;
+			drawitem(item, preview_command ? 0 : x, y,
+			         preview_command ? listwidth : mw - x);
+		}
+		if (preview_command)
+			drawpreview(listwidth, titleh + bh, mw - listwidth, lines * bh);
 	} else if (matches) {
-		/* draw horizontal list */
+		/* Keep horizontal menus unchanged. */
 		x += inputw;
 		w = TEXTW("<");
 		if (curr->left) {
 			drw_setscheme(drw, scheme[SchemeNorm]);
-			drw_text(drw, x, 0, w, bh, lrpad / 2, "<", 0);
+			drw_text(drw, x, titleh, w, bh, lrpad / 2, "<", 0);
 		}
 		x += w;
 		for (item = curr; item != next; item = item->right)
-			x = drawitem(item, x, 0, textw_clamp(item->text, mw - x - TEXTW(">") - TEXTW(numbers)));
+			x = drawitem(item, x, titleh, textw_clamp(item->text, mw - x - TEXTW(">") - TEXTW(numbers)));
 		if (next) {
 			w = TEXTW(">");
 			drw_setscheme(drw, scheme[SchemeNorm]);
-			drw_text(drw, mw - w - TEXTW(numbers), 0, w, bh, lrpad / 2, ">", 0);
+			drw_text(drw, mw - w - TEXTW(numbers), titleh, w, bh, lrpad / 2, ">", 0);
 		}
 	}
 
 	drw_setscheme(drw, scheme[SchemeNorm]);
-	drw_text(drw, mw - TEXTW(numbers), 0, TEXTW(numbers), bh, lrpad / 2, numbers, 0);
+	drw_text(drw, mw - TEXTW(numbers), titleh, TEXTW(numbers), bh, lrpad / 2, numbers, 0);
 	drw_map(drw, win, 0, 0, mw, mh);
 }
 
@@ -862,8 +1042,37 @@ static void
 run(void)
 {
 	XEvent ev;
+	struct pollfd fds[2];
+	int ready;
 
-	while (!XNextEvent(dpy, &ev)) {
+	for (;;) {
+		/*
+		 * Only poll while a preview command is running. Without previews
+		 * retain dmenu's ordinary blocking X event loop.
+		 */
+		if (preview_fd >= 0 && !XPending(dpy)) {
+			fds[0].fd = ConnectionNumber(dpy);
+			fds[0].events = POLLIN;
+			fds[1].fd = preview_fd;
+			fds[1].events = POLLIN | POLLHUP;
+			ready = poll(fds, 2, 100);
+			if (ready < 0 && errno != EINTR)
+				die("preview poll:");
+			if (ready > 0 && (fds[1].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)))
+				preview_read();
+			/* Time limit prevents a broken backend from lingering. */
+			if (preview_fd >= 0 && time(NULL) - preview_start >= 3) {
+				preview_stop();
+				if (preview_length == 0) {
+					strcpy(preview_output, "Preview timed out.");
+					preview_length = strlen(preview_output);
+				}
+				drawmenu();
+			}
+			if (!XPending(dpy))
+				continue;
+		}
+		XNextEvent(dpy, &ev);
 		if (XFilterEvent(&ev, win))
 			continue;
 		switch(ev.type) {
@@ -923,7 +1132,7 @@ setup(void)
 	bh = drw->fonts->h + 2;
 	bh = MAX(bh,lineheight);	/* make a menu line AT LEAST 'lineheight' tall */
 	lines = MAX(lines, 0);
-	mh = (lines + 1) * bh;
+	mh = (lines + 1 + (title && *title ? 1 : 0)) * bh;
 	promptw = (prompt && *prompt) ? TEXTW(prompt) - lrpad / 4 : 0;
 #ifdef XINERAMA
 	i = 0;
@@ -952,7 +1161,8 @@ setup(void)
 					break;
 
 		if (centered) {
-			mw = MIN(MAX(max_textw() + promptw, min_width), info[i].width);
+			mw = MIN(MAX(max_textw() + promptw,
+			            preview_command ? MAX(min_width, 900) : min_width), info[i].width);
 			x = info[i].x_org + ((info[i].width  - mw) / 2);
 			y = info[i].y_org + ((info[i].height - mh) / menu_height_ratio);
 		} else {
@@ -970,7 +1180,8 @@ setup(void)
 			    parentwin);
 
 		if (centered) {
-			mw = MIN(MAX(max_textw() + promptw, min_width), wa.width);
+			mw = MIN(MAX(max_textw() + promptw,
+			            preview_command ? MAX(min_width, 900) : min_width), wa.width);
 			x = (wa.width  - mw) / 2;
 			y = (wa.height - mh) / 2;
 		} else {
@@ -1024,14 +1235,24 @@ usage(void)
 {
 	die("usage: dmenu [-bcfivs] [-vi] [-l lines] [-h height] [-p prompt] [-fn font] [-m monitor]\n"
 	    "             [-nb color] [-nf color] [-sb color] [-sf color] [-bw width]\n"
-	    "             [-nhb color] [-nhf color] [-shb color] [-shf color] [-w windowid]");
+	    "             [-nhb color] [-nhf color] [-shb color] [-shf color] [-w windowid]\n"
+	    "             [-title text] [-preview executable] [-preview-title text]\n"
+	    "             [-preview-pos right] [-preview-size percent]");
 }
 
 int
 main(int argc, char *argv[])
 {
 	XWindowAttributes wa;
+	struct sigaction child_action;
 	int i, fast = 0;
+
+	memset(&child_action, 0, sizeof child_action);
+	child_action.sa_handler = preview_reap;
+	child_action.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+	sigemptyset(&child_action.sa_mask);
+	if (sigaction(SIGCHLD, &child_action, NULL) == -1)
+		die("sigaction:");
 
 	for (i = 1; i < argc; i++)
 		/* these options take no arguments */
@@ -1090,6 +1311,21 @@ main(int argc, char *argv[])
 			embed = argv[++i];
 		else if (!strcmp(argv[i], "-bw"))
 			border_width = atoi(argv[++i]); /* border width */
+		else if (!strcmp(argv[i], "-title"))
+			title = argv[++i];
+		else if (!strcmp(argv[i], "-preview"))
+			preview_command = argv[++i];
+		else if (!strcmp(argv[i], "-preview-title"))
+			preview_title = argv[++i];
+		else if (!strcmp(argv[i], "-preview-size")) {
+			int parsed = atoi(argv[++i]);
+			if (parsed < 20 || parsed > 70)
+				usage();
+			preview_size = parsed;
+		} else if (!strcmp(argv[i], "-preview-pos")) {
+			if (strcmp(argv[++i], "right"))
+				usage();
+		}
 		else
 			usage();
 
